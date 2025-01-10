@@ -6,10 +6,7 @@
     "pin": "031-45-154"
   },
   "description": "HomeBridge HTTP Status Control",
-  "plugins": [
-    "homebridge-plugin-name",
-    "homebridge-config-ui-x"
-  ],
+  "plugins": ["homebridge-tp357", "homebridge-config-ui-x"],
   "platforms": [
     {
       "name": "Config",
@@ -23,8 +20,8 @@
       "debug": false
     },
     {
-      "name": "homebridge-plugin-name",
-      "platform": "ExampleHomebridgePlugin"
+      "name": "homebridge-tp357",
+      "platform": "TP357"
     }
   ],
   "accessories": []
