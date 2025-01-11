@@ -6,11 +6,15 @@
   "schema": {
     "type": "object",
     "properties": {
-      "name": {
-        "title": "Name",
-        "type": "string",
+      "devices_name": {
+        "title": "Names of devices to connect to",
+        "type": "array",
+        "uniqueItems": true,
         "required": true,
-        "default": "Example Dynamic Platform"
+        "items": {
+          "title": "name",
+          "type": "string"
+        }
       }
     }
   }

@@ -8,7 +8,7 @@ import type {
   PlatformConfig,
   Service,
 } from 'homebridge'
-import { TP357, TP357Context } from './platformAccessory.js'
+import { TP357 } from './platformAccessory.js'
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js'
 
 /**
@@ -21,8 +21,7 @@ export class HomebridgePlatform implements DynamicPlatformPlugin {
   public readonly Characteristic: typeof Characteristic
 
   // this is used to track restored cached accessories
-  public readonly accessories: Map<string, PlatformAccessory<TP357Context>> =
-    new Map()
+  public readonly accessories: Map<string, PlatformAccessory> = new Map()
   public readonly discoveredCacheUUIDs: string[] = []
 
   constructor(
@@ -53,74 +52,75 @@ export class HomebridgePlatform implements DynamicPlatformPlugin {
     this.log.info('Loading accessory from cache:', accessory.displayName)
 
     // add the restored accessory to the accessories cache, so we can track if it has already been registered
-    this.accessories.set(
-      accessory.UUID,
-      accessory as PlatformAccessory<TP357Context>,
-    )
+    this.accessories.set(accessory.UUID, accessory)
   }
 
   discoverDevices() {
-    // EXAMPLE ONLY
-    // A real plugin you would discover accessories from the local network, cloud services
-    // or a user-defined array in the platform config.
-    const TP357_NAME = 'TP357 (C2F4)'
-
-    noble.on('stateChange', async (state) => {
+    noble.on('stateChange', (state) => {
       if (state === 'poweredOn') {
-        await noble.startScanning([], false)
+        noble.startScanning([], false)
+        this.log.info(
+          'Looking for devices with names: ',
+          this.config.devices_name,
+        )
       }
     })
 
     noble.on('discover', async (peripheral) => {
-      if (peripheral.advertisement.localName === TP357_NAME) {
-        await noble.stopScanningAsync()
+      const deviceName = peripheral.advertisement.localName
+      const uuid = this.api.hap.uuid.generate(peripheral.id)
+      const existingAccessory = this.accessories.get(uuid)
+
+      if (existingAccessory) {
         await peripheral.connectAsync()
+        const tp357 = new TP357(this, existingAccessory, peripheral)
 
-        const uuid = this.api.hap.uuid.generate(peripheral.id)
-        const existingAccessory = this.accessories.get(uuid)
-
-        if (existingAccessory) {
+        if (this.shouldDeviceBePaired(deviceName)) {
           this.log.info(
             'Restoring existing accessory from cache:',
             existingAccessory.displayName,
           )
-
-          // if you need to update the accessory.context then you should run `api.updatePlatformAccessories`. e.g.:
-          // existingAccessory.context.device = device;
-          // this.api.updatePlatformAccessories([existingAccessory]);
-
-          // create the accessory handler for the restored accessory
-          // this is imported from `platformAccessory.ts`
-          new TP357(this, existingAccessory)
-
-          // it is possible to remove platform accessories at any time using `api.unregisterPlatformAccessories`, e.g.:
-          // remove platform accessories when no longer present
-          // this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [existingAccessory]);
-          // this.log.info('Removing existing accessory from cache:', existingAccessory.displayName);
+          tp357.subscribe()
         } else {
           this.log.info(
-            'Adding new accessory:',
-            peripheral.advertisement.localName,
+            `Unregistering cached accessory ${deviceName} that isn't in the config.`,
           )
-
-          const accessory = new this.api.platformAccessory<TP357Context>(
-            peripheral.advertisement.localName,
-            uuid,
-          )
-          const { characteristics } =
-            await peripheral.discoverSomeServicesAndCharacteristicsAsync([], [])
-
-          accessory.context.peripheral = peripheral
-          accessory.context.characteristics = characteristics
-
-          new TP357(this, accessory)
-          this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [
-            accessory,
+          this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [
+            existingAccessory,
           ])
-        }
 
-        this.discoveredCacheUUIDs.push(uuid)
+          tp357.unsubscribe()
+        }
+      } else {
+        if (!this.shouldDeviceBePaired(deviceName)) {
+          if (
+            deviceName &&
+            deviceName.includes('TP357') &&
+            !existingAccessory
+          ) {
+            this.log.info(
+              `Found a TP357 device named '${deviceName}', include it in the config to pair it with the plugin.`,
+            )
+          }
+          return
+        }
+        await peripheral.connectAsync()
+        this.log.info('Adding new accessory:', deviceName)
+
+        const accessory = new this.api.platformAccessory(deviceName, uuid)
+
+        new TP357(this, accessory, peripheral).subscribe()
+
+        this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [
+          accessory,
+        ])
       }
+
+      this.discoveredCacheUUIDs.push(uuid)
     })
+  }
+
+  private shouldDeviceBePaired(deviceName: string) {
+    return this.config.devices_name.includes(deviceName)
   }
 }

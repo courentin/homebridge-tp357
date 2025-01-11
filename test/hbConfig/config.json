@@ -13,7 +13,7 @@
       "name": "Config",
       "port": 8581,
       "auth": "none",
-      "theme": "auto",
+      "theme": "orange",
       "tempUnits": "c",
       "lang": "auto",
       "sudo": false,
@@ -21,7 +21,7 @@
       "debug": false
     },
     {
-      "name": "homebridge-tp357",
+      "devices_name": [],
       "platform": "TP357"
     }
   ],
