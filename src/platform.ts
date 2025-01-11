@@ -39,8 +39,12 @@ export class HomebridgePlatform implements DynamicPlatformPlugin {
     // in order to ensure they weren't added to homebridge already. This event can also be used
     // to start discovery of new accessories.
     this.api.on('didFinishLaunching', () => {
-      log.debug('Executed didFinishLaunching callback')
+      this.log.debug('Executed didFinishLaunching callback')
       this.discoverDevices()
+    })
+
+    noble.on('warning', (message: string) => {
+      this.log.warn(`noble warning: ${message}`)
     })
   }
 
@@ -56,13 +60,17 @@ export class HomebridgePlatform implements DynamicPlatformPlugin {
   }
 
   discoverDevices() {
+    this.log.debug('Discovering devices...')
     noble.on('stateChange', (state) => {
       if (state === 'poweredOn') {
+        this.log.debug('Powered on, starting scanning...')
         noble.startScanning([], false)
         this.log.info(
           'Looking for devices with names: ',
           this.config.devices_name,
         )
+      } else {
+        this.log.debug(`Noble state changed to ${state}`)
       }
     })
 
