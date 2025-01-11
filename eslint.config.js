@@ -1,5 +1,5 @@
-import eslint from '@eslint/js';
-import tseslint from 'typescript-eslint';
+import eslint from '@eslint/js'
+import tseslint from 'typescript-eslint'
 
 export default tseslint.config(
   {
@@ -10,7 +10,7 @@ export default tseslint.config(
       quotes: ['error', 'single'],
       indent: ['error', 2, { SwitchCase: 0 }],
       'linebreak-style': ['error', 'unix'],
-      semi: ['error', 'always'],
+      semi: ['error', 'never'],
       'comma-dangle': ['error', 'always-multiline'],
       'dot-notation': 'error',
       eqeqeq: ['error', 'smart'],
@@ -35,4 +35,4 @@ export default tseslint.config(
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
-);
+)
