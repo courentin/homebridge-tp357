@@ -1,9 +1,10 @@
 {
   "bridge": {
     "name": "PluginTemplate",
-    "username": "AA:BB:CC:DD:EE:FF",
-    "port": 51826,
-    "pin": "031-45-154"
+    "username": "AA:BB:CC:DD:FF:FF",
+    "port": 52503,
+    "pin": "031-45-875",
+    "advertiser": "bonjour-hap"
   },
   "description": "HomeBridge HTTP Status Control",
   "plugins": ["homebridge-tp357", "homebridge-config-ui-x"],
