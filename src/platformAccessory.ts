@@ -41,8 +41,14 @@ export class TP357 {
     private readonly accessory: PlatformAccessory,
     deviceName: string,
   ) {
+    // HAP requires names to start and end with a letter or number, and the
+    // TP357 advertises itself as e.g. "TP357 (C2F4)". The accessory's
+    // displayName is kept as-is since it is matched against the config.
+    const name = deviceName.replaceAll('(', '').replaceAll(')', '')
+
     this.accessory
       .getService(this.platform.Service.AccessoryInformation)!
+      .setCharacteristic(this.platform.Characteristic.Name, name)
       .setCharacteristic(this.platform.Characteristic.Manufacturer, 'ThermPro')
       .setCharacteristic(this.platform.Characteristic.Model, 'TP357')
       .setCharacteristic(
@@ -53,8 +59,6 @@ export class TP357 {
     this.tempService =
       this.accessory.getService(this.platform.Service.TemperatureSensor) ||
       this.accessory.addService(this.platform.Service.TemperatureSensor)
-
-    const name = deviceName.replaceAll('(', '').replaceAll(')', '')
 
     this.tempService.setCharacteristic(this.platform.Characteristic.Name, name)
 
