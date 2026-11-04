@@ -1,18 +1,45 @@
 import type { PlatformAccessory, Service } from 'homebridge'
 
-import { Peripheral } from '@abandonware/noble'
 import type { HomebridgePlatform } from './platform.js'
 
-const REPORT_CHARACTERISTIC_UUID = '000102030405060708090a0b0c0d2b10'
+export interface Reading {
+  temperature: number
+  humidity: number
+}
+
+/**
+ * Decode a reading from the manufacturer data of a TP357 advertisement.
+ *
+ * The TP357 broadcasts its current reading in every BLE advertisement, so
+ * there is no need to open a GATT connection (which keeps the radio of the
+ * thermometer awake and drains its battery quickly).
+ *
+ * Layout of the manufacturer data (as exposed by noble, i.e. including the
+ * two "company identifier" bytes, which the TP357 uses for its payload):
+ *   byte 0     : header
+ *   bytes 1-2  : temperature, signed int16 little-endian, in tenths of °C
+ *   byte 3     : relative humidity, in %
+ */
+export function parseAdvertisement(data: Buffer | undefined): Reading | null {
+  if (!data || data.length < 4) {
+    return null
+  }
+
+  return {
+    temperature: data.readInt16LE(1) / 10.0,
+    humidity: data.readUInt8(3),
+  }
+}
 
 export class TP357 {
   private tempService: Service
   private humidService: Service
+  private lastReading: Reading | null = null
 
   constructor(
     private readonly platform: HomebridgePlatform,
     private readonly accessory: PlatformAccessory,
-    private readonly peripheral: Peripheral,
+    deviceName: string,
   ) {
     this.accessory
       .getService(this.platform.Service.AccessoryInformation)!
@@ -27,9 +54,7 @@ export class TP357 {
       this.accessory.getService(this.platform.Service.TemperatureSensor) ||
       this.accessory.addService(this.platform.Service.TemperatureSensor)
 
-    const name = peripheral.advertisement.localName
-      .replaceAll('(', '')
-      .replaceAll(')', '')
+    const name = deviceName.replaceAll('(', '').replaceAll(')', '')
 
     this.tempService.setCharacteristic(this.platform.Characteristic.Name, name)
 
@@ -40,50 +65,48 @@ export class TP357 {
     this.humidService.setCharacteristic(this.platform.Characteristic.Name, name)
   }
 
-  async subscribe() {
-    const { characteristics } =
-      await this.peripheral.discoverSomeServicesAndCharacteristicsAsync(
-        [],
-        [REPORT_CHARACTERISTIC_UUID],
+  handleAdvertisement(manufacturerData: Buffer | undefined) {
+    const reading = parseAdvertisement(manufacturerData)
+    if (!reading) {
+      return
+    }
+
+    const { temperature, humidity } = reading
+    // The TP357 measures from -20°C to 60°C and 10% to 99% RH.
+    if (
+      temperature < -40 ||
+      temperature > 70 ||
+      humidity < 0 ||
+      humidity > 100
+    ) {
+      this.platform.log.debug(
+        `Ignoring invalid data from ${this.accessory.displayName} ` +
+          `(${humidity}%, ${temperature}°C, raw ${manufacturerData?.toString('hex')})`,
       )
+      return
+    }
 
-    characteristics.map((c) => {
-      c.on('data', (data) => {
-        const temp = data.readUInt16LE(3) / 10.0
-        const humid = data.readUInt8(5)
-        if (temp > 50) {
-          this.platform.log.warn(
-            `Invalid data received from sensor (${humid}%,${temp}°C), ignoring.`,
-          )
-          return
-        }
+    if (
+      this.lastReading?.temperature === temperature &&
+      this.lastReading?.humidity === humidity
+    ) {
+      return
+    }
+    this.lastReading = reading
 
-        this.platform.log.debug(`${humid}%,${temp}°C`)
+    this.platform.log.debug(
+      `${this.accessory.displayName}: ${humidity}%, ${temperature}°C ` +
+        `(raw ${manufacturerData?.toString('hex')})`,
+    )
 
-        this.tempService.updateCharacteristic(
-          this.platform.Characteristic.CurrentTemperature,
-          temp,
-        )
+    this.tempService.updateCharacteristic(
+      this.platform.Characteristic.CurrentTemperature,
+      temperature,
+    )
 
-        this.humidService.updateCharacteristic(
-          this.platform.Characteristic.CurrentRelativeHumidity,
-          humid,
-        )
-      })
-
-      c.subscribeAsync()
-    })
-  }
-
-  async unsubscribe() {
-    const { characteristics } =
-      await this.peripheral.discoverSomeServicesAndCharacteristicsAsync(
-        [],
-        [REPORT_CHARACTERISTIC_UUID],
-      )
-
-    characteristics.map((c) => {
-      c.unsubscribeAsync()
-    })
+    this.humidService.updateCharacteristic(
+      this.platform.Characteristic.CurrentRelativeHumidity,
+      humidity,
+    )
   }
 }
