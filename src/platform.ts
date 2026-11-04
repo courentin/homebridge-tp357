@@ -13,8 +13,11 @@ import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js'
 
 /**
  * HomebridgePlatform
- * This class is the main constructor for your plugin, this is where you should
- * parse the user config and discover/register accessories with Homebridge.
+ *
+ * Devices are never connected to: the TP357 broadcasts its readings in its
+ * BLE advertisements, so we only listen to them (like the ThermoPro app's
+ * home screen does). Keeping a GATT connection open forces the thermometer
+ * to wake its radio for every connection event and drains its battery.
  */
 export class HomebridgePlatform implements DynamicPlatformPlugin {
   public readonly Service: typeof Service
@@ -22,7 +25,10 @@ export class HomebridgePlatform implements DynamicPlatformPlugin {
 
   // this is used to track restored cached accessories
   public readonly accessories: Map<string, PlatformAccessory> = new Map()
-  public readonly discoveredCacheUUIDs: string[] = []
+
+  // devices currently handled, by accessory UUID
+  private readonly devices: Map<string, TP357> = new Map()
+  private readonly reportedUnconfigured: Set<string> = new Set()
 
   constructor(
     public readonly log: Logging,
@@ -34,13 +40,14 @@ export class HomebridgePlatform implements DynamicPlatformPlugin {
 
     this.log.debug('Finished initializing platform:', this.config.name)
 
-    // When this event is fired it means Homebridge has restored all cached accessories from disk.
-    // Dynamic Platform plugins should only register new accessories after this event was fired,
-    // in order to ensure they weren't added to homebridge already. This event can also be used
-    // to start discovery of new accessories.
     this.api.on('didFinishLaunching', () => {
       this.log.debug('Executed didFinishLaunching callback')
+      this.removeUnconfiguredAccessories()
       this.discoverDevices()
+    })
+
+    this.api.on('shutdown', () => {
+      noble.stopScanning()
     })
 
     noble.on('warning', (message: string) => {
@@ -50,21 +57,35 @@ export class HomebridgePlatform implements DynamicPlatformPlugin {
 
   /**
    * This function is invoked when homebridge restores cached accessories from disk at startup.
-   * It should be used to set up event handlers for characteristics and update respective values.
    */
   configureAccessory(accessory: PlatformAccessory) {
     this.log.info('Loading accessory from cache:', accessory.displayName)
-
-    // add the restored accessory to the accessories cache, so we can track if it has already been registered
     this.accessories.set(accessory.UUID, accessory)
+  }
+
+  private removeUnconfiguredAccessories() {
+    for (const [uuid, accessory] of this.accessories) {
+      if (!this.shouldDeviceBePaired(accessory.displayName)) {
+        this.log.info(
+          `Unregistering cached accessory ${accessory.displayName} that isn't in the config.`,
+        )
+        this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [
+          accessory,
+        ])
+        this.accessories.delete(uuid)
+      }
+    }
   }
 
   discoverDevices() {
     this.log.debug('Discovering devices...')
-    noble.on('stateChange', (state) => {
+
+    const startScanning = (state: string) => {
       if (state === 'poweredOn') {
         this.log.debug('Powered on, starting scanning...')
-        noble.startScanning([], false)
+        // allowDuplicates: the reading is in the advertisement itself, so we
+        // need every advertisement, not only the first one per device.
+        noble.startScanning([], true)
         this.log.info(
           'Looking for devices with names: ',
           this.config.devices_name,
@@ -72,63 +93,60 @@ export class HomebridgePlatform implements DynamicPlatformPlugin {
       } else {
         this.log.debug(`Noble state changed to ${state}`)
       }
-    })
+    }
 
-    noble.on('discover', async (peripheral) => {
-      const deviceName = peripheral.advertisement.localName
+    noble.on('stateChange', startScanning)
+    // The adapter may already be powered on before we registered the listener.
+    if (noble._state === 'poweredOn') {
+      startScanning(noble._state)
+    }
+
+    noble.on('discover', (peripheral) => {
       const uuid = this.api.hap.uuid.generate(peripheral.id)
-      const existingAccessory = this.accessories.get(uuid)
+      const { localName: deviceName, manufacturerData } =
+        peripheral.advertisement
 
-      if (existingAccessory) {
-        await peripheral.connectAsync()
-        const tp357 = new TP357(this, existingAccessory, peripheral)
+      let device = this.devices.get(uuid)
 
-        if (this.shouldDeviceBePaired(deviceName)) {
-          this.log.info(
-            'Restoring existing accessory from cache:',
-            existingAccessory.displayName,
-          )
-          tp357.subscribe()
-        } else {
-          this.log.info(
-            `Unregistering cached accessory ${deviceName} that isn't in the config.`,
-          )
-          this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [
-            existingAccessory,
-          ])
-
-          tp357.unsubscribe()
+      if (!device) {
+        if (!deviceName) {
+          return
         }
-      } else {
+
         if (!this.shouldDeviceBePaired(deviceName)) {
           if (
-            deviceName &&
             deviceName.includes('TP357') &&
-            !existingAccessory
+            !this.reportedUnconfigured.has(uuid)
           ) {
+            this.reportedUnconfigured.add(uuid)
             this.log.info(
               `Found a TP357 device named '${deviceName}', include it in the config to pair it with the plugin.`,
             )
           }
           return
         }
-        await peripheral.connectAsync()
-        this.log.info('Adding new accessory:', deviceName)
 
-        const accessory = new this.api.platformAccessory(deviceName, uuid)
-
-        new TP357(this, accessory, peripheral).subscribe()
-
-        this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [
-          accessory,
-        ])
+        let accessory = this.accessories.get(uuid)
+        if (accessory) {
+          this.log.info('Restoring existing accessory from cache:', deviceName)
+          device = new TP357(this, accessory, deviceName)
+        } else {
+          this.log.info('Adding new accessory:', deviceName)
+          accessory = new this.api.platformAccessory(deviceName, uuid)
+          device = new TP357(this, accessory, deviceName)
+          this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [
+            accessory,
+          ])
+          this.accessories.set(uuid, accessory)
+        }
+        this.devices.set(uuid, device)
       }
 
-      this.discoveredCacheUUIDs.push(uuid)
+      device.handleAdvertisement(manufacturerData)
     })
   }
 
   private shouldDeviceBePaired(deviceName: string) {
-    return this.config.devices_name.includes(deviceName)
+    return (this.config.devices_name ?? []).includes(deviceName)
   }
 }
